@@ -77,7 +77,7 @@ def clean(frame, id_col, date_cols):
                    'pasted_duplicates_removed': raw_count - len(frame),
                    'repeated_ids_for_review': sorted(frame.loc[frame.case_id.duplicated(False), 'case_id'].dropna().unique().tolist())}
 
-def load_and_reconcile(path):
+def load_and_reconcile(path, *, brief_intakes=None):
     x = path if isinstance(path, dict) else pd.ExcelFile(path)
     def sheet(key):
         return x[key].copy() if isinstance(x, dict) else pd.read_excel(x,key)
@@ -89,7 +89,9 @@ def load_and_reconcile(path):
     conflicts = set(sq['repeated_ids_for_review']) | set(fq['repeated_ids_for_review'])
     # Conflicting IDs are quarantined instead of arbitrarily selecting a row or multiplying joins.
     # The two provisional intakes are from the real brief, not generated demo records.
-    provisional = set() if isinstance(path,dict) else {'RF-1098','RF-1099'}
+    if brief_intakes is None:
+        brief_intakes = not isinstance(path, dict)
+    provisional = {'RF-1098','RF-1099'} if brief_intakes else set()
     ids = sorted(set(s.case_id.dropna()) | set(f.case_id.dropna()) | set(e.case_id.dropna()) | provisional)
     cases = []
     for case_id in ids:
