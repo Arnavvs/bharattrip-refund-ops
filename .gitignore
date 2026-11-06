@@ -1,0 +1,8 @@
+__pycache__/
+.venv/
+.env
+.streamlit/secrets.toml
+tmp/
+*.zip
+build_report.py
+upload_manifest.json
