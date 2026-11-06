@@ -2,7 +2,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 from demo_data import demo_tables
-from refund_ops import ComplaintAI, draft_reply, load_and_reconcile
+from refund_ops import ComplaintAI, draft_reply, load_and_reconcile, reference
 
 st.set_page_config(page_title='BharatTrip refund review', layout='wide')
 st.title('BharatTrip refund review')
@@ -42,6 +42,11 @@ if not queue.empty:
     selected = st.selectbox('Inspect case', queue.case_id)
     record = cases.set_index('case_id').loc[selected].to_dict() | {'case_id': selected}
     st.write(record['next_action'])
+    with st.expander('Original Support and Finance evidence'):
+        for sheet_name, id_col in [('Support_Tracker','Ticket ID'),('Finance_Tracker','Ref No')]:
+            raw = source[sheet_name] if isinstance(source,dict) else pd.read_excel(source,sheet_name=sheet_name)
+            st.write(sheet_name.replace('_',' '))
+            st.dataframe(raw[raw[id_col].map(reference).eq(selected)], hide_index=True)
     st.text_area('Evidence-grounded draft for human review', draft_reply(record), height=130)
     st.dataframe(escalations[escalations.case_id.eq(selected)], hide_index=True)
 st.subheader('Local AI complaint triage')

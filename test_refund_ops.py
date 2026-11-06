@@ -42,6 +42,7 @@ class RefundTests(unittest.TestCase):
         self.assertEqual(s['issue_counts']['missing_finance_record'],2)
         self.assertIn('conflicting_duplicate_id',c.set_index('case_id').loc['RF-9006','issues'])
         self.assertNotIn('support_closed_without_finance_paid',c.set_index('case_id').loc['RF-9006','issues'])
+        self.assertIn('multiple records', draft_reply(c.set_index('case_id').loc['RF-9006'].to_dict() | {'case_id':'RF-9006'}))
         self.assertEqual(len(e),2)
 
 if __name__ == '__main__':

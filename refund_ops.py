@@ -203,7 +203,9 @@ def load_and_reconcile(path):
 def draft_reply(case):
     """Evidence-only template; requires human approval and adds no payment promise."""
     ref = case['case_id']
-    if not case['finance_present']:
+    if 'conflicting_duplicate_id' in case.get('issues',''):
+        state = 'We found multiple records under this reference and are checking them before confirming payment status or amount.'
+    elif not case['finance_present']:
         state = 'We are checking the Finance handoff. We do not yet have a matched Finance payment record.'
     elif case['finance_status'] == 'Refund Done':
         state = 'Our Finance tracker records a completed refund. We are verifying the payment reference and any amount difference.'
