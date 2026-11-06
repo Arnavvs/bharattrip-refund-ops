@@ -4,61 +4,101 @@ import streamlit as st
 from demo_data import demo_tables
 from refund_ops import ComplaintAI, draft_reply, load_and_reconcile, reference
 
-st.set_page_config(page_title='BharatTrip refund review', layout='wide')
-st.title('BharatTrip refund review')
-st.write('Find the handoff gaps. Give every refund an owner and a verifiable next step.')
-st.caption('Snapshot: 30 June 2026. Read-only prototype. Actions and messages require human review.')
-upload = st.file_uploader('Optional replacement workbook', type=['xlsx'])
-source = upload or next(Path(__file__).parent.glob('*.xlsx'), None)
-if source is None:
-    source = demo_tables()
-    st.info('GENERATED DEMO: these illustrative records are not the supplied assessment workbook. Upload your workbook to run the actual analysis. Files are processed in memory.')
+st.set_page_config(page_title="Refund review | BharatTrip", layout="wide")
+st.title("Refund review")
+st.caption("BharatTrip  /  Operations  /  30 June 2026")
+upload = st.sidebar.file_uploader("Analyse assessment workbook", type=["xlsx"])
+local = next(Path(__file__).parent.glob("*.xlsx"), None)
+identity = ("upload", upload.file_id) if upload else (("local", str(local), local.stat().st_mtime_ns) if local else ("demo",))
+if st.session_state.get("source_identity") != identity:
+    try:
+        with st.spinner("Matching Support, Finance and escalation records…"):
+            if local or upload:
+                with pd.ExcelFile(upload or local) as book:
+                    raw = {sheet: book.parse(sheet) for sheet in ["Support_Tracker", "Finance_Tracker", "Escalations"]}
+            else:
+                raw = demo_tables()
+            cases, complaints, monthly, summary = load_and_reconcile(raw, brief_intakes=bool(upload or local))
+            cases = cases.sort_values(["priority","open_escalations","age_days"], ascending=[True,False,False]).set_index("case_id", drop=False)
+            evidence = {}
+            for sheet, field in [("Support_Tracker","Ticket ID"),("Finance_Tracker","Ref No")]:
+                evidence[sheet] = dict(tuple(raw[sheet].groupby(raw[sheet][field].map(reference))))
+            st.session_state["snapshot"] = cases, complaints, monthly, summary, evidence
+            st.session_state["source_identity"] = identity
+    except (KeyError, ValueError, OSError) as exc:
+        st.error(f"Could not read the required tracker sheets. {exc}")
+        st.stop()
+cases, complaints, monthly, summary, evidence = st.session_state["snapshot"]
+st.sidebar.caption("Generated sample · 10 cases" if identity == ("demo",) else "Using supplied workbook")
+page = st.sidebar.radio("Workspace", ["Review queue", "Trends", "Complaint triage"])
+labels = {"P1":"Urgent","P2":"Review","P3":"Routine"}
+def readable(value):
+    return value.replace("_"," ").capitalize()
+if page == "Review queue":
+    a,b,c = st.columns(3)
+    a.metric("Support cases",summary["support_cases"],border=True)
+    b.metric("Closed without recorded payout",summary["issue_counts"].get("support_closed_without_finance_paid",0),border=True)
+    c.metric("Open complaints",summary["open_escalations"],border=True)
+    st.subheader("Case queue")
+    @st.fragment
+    def inspect_queue():
+        left,right = st.columns([1,2])
+        priority = left.selectbox("Priority",["All","P1","P2","P3"],format_func=lambda x: labels.get(x,"All priorities"))
+        issue = right.selectbox("Issue",["All issues",*sorted(summary["issue_counts"])],format_func=readable)
+        rows = cases if priority == "All" else cases[cases.priority.eq(priority)]
+        if issue != "All issues":
+            rows = rows[rows.issues.str.split("; ").map(lambda flags: issue in flags)]
+        st.caption(f"{len(rows):,} matching cases · Select a row to inspect its evidence")
+        if rows.empty:
+            st.info("No cases match these filters.")
+            return
+        visible = rows[["case_id","priority","agent","support_status","finance_status","open_escalations"]].copy()
+        visible.columns = ["Reference","Priority","Agency","Support","Finance","Open complaints"]
+        event = st.dataframe(visible,hide_index=True,on_select="rerun",selection_mode="single-row",
+                             key=f"queue_{identity}_{priority}_{issue}",height=270,use_container_width=True)
+        idx = event.selection.rows
+        case = rows.iloc[idx[0] if idx and idx[0]<len(rows) else 0]
+        ref = case.case_id
+        st.subheader(ref)
+        st.write(case.next_action)
+        if case.issues:
+            st.caption(" · ".join(readable(x) for x in case.issues.split("; ")))
+        with st.expander("Support and Finance evidence"):
+            for sheet, records in evidence.items():
+                st.write(readable(sheet))
+                if ref in records:
+                    st.dataframe(records[ref],hide_index=True)
+                else:
+                    st.caption("No matching record")
+            linked = complaints[complaints.case_id.eq(ref)]
+            if len(linked):
+                st.write("Linked complaints")
+                st.dataframe(linked[["Escalation ID","Complaint","Status","Days Open"]],hide_index=True)
+        with st.expander("Suggested reply for human review"):
+            st.write(draft_reply(case))
+        st.download_button("Export matching cases",rows.to_csv(index=False),"review_queue.csv","text/csv",on_click="ignore")
+    inspect_queue()
+elif page == "Trends":
+    st.subheader("Requests and escalations by month")
+    counts = monthly.iloc[:,:2].copy()
+    counts.columns = ["Requests","Escalations"]
+    st.bar_chart(counts,stack=False,color=["#087f8c","#d47836"])
+    st.dataframe(monthly)
+    st.caption("Complaint logging started in March. Monthly workload includes complaints about earlier requests.")
+    with st.expander("Reconciliation checks"):
+        st.json(summary["quality"])
 else:
-    st.success('Analysing supplied workbook. Snapshot fixed at 30 June 2026.')
-try:
-    cases, escalations, monthly, summary = load_and_reconcile(source)
-except Exception as exc:
-    st.error(f'Could not analyse workbook: {exc}')
-    st.stop()
-a,b,c,d = st.columns(4)
-a.metric('Support cases', summary['support_cases'])
-b.metric('Matched Finance records', summary['matched_cases'])
-c.metric('Open escalations', summary['open_escalations'])
-d.metric('Closed without Finance paid', summary['issue_counts'].get('support_closed_without_finance_paid',0))
-st.subheader('Monthly requests and escalations')
-st.caption('February complaints were not logged. Ratios mix older complaint cohorts with new requests; they are workload indicators, not cohort escalation rates.')
-st.dataframe(monthly, use_container_width=True)
-st.bar_chart(monthly[['requests_logged', 'escalations_raised']], color=['#087f8c','#eb9650'])
-st.subheader('Review queue')
-priorities = st.multiselect('Priority', ['P1','P2','P3'], default=['P1','P2'])
-issue = st.selectbox('Issue', ['All'] + sorted(summary['issue_counts']))
-queue = cases[cases.priority.isin(priorities)]
-if issue != 'All':
-    queue = queue[queue.issues.str.split('; ').map(lambda v: issue in v)]
-queue = queue.sort_values(['priority','open_escalations','age_days'], ascending=[True,False,False])
-st.dataframe(queue, use_container_width=True, hide_index=True)
-st.download_button('Download current queue', queue.to_csv(index=False), 'refund_review_queue.csv', 'text/csv')
-if not queue.empty:
-    selected = st.selectbox('Inspect case', queue.case_id)
-    record = cases.set_index('case_id').loc[selected].to_dict() | {'case_id': selected}
-    st.write(record['next_action'])
-    with st.expander('Original Support and Finance evidence'):
-        for sheet_name, id_col in [('Support_Tracker','Ticket ID'),('Finance_Tracker','Ref No')]:
-            raw = source[sheet_name] if isinstance(source,dict) else pd.read_excel(source,sheet_name=sheet_name)
-            st.write(sheet_name.replace('_',' '))
-            st.dataframe(raw[raw[id_col].map(reference).eq(selected)], hide_index=True)
-    st.text_area('Evidence-grounded draft for human review', draft_reply(record), height=130)
-    st.dataframe(escalations[escalations.case_id.eq(selected)], hide_index=True)
-st.subheader('Local AI complaint triage')
-st.caption('TF-IDF compares wording against eight editable example categories. Similarity is not confidence. No external API, no LLM generation, no automated decisions. All outputs are suggestions.')
-complaint = st.text_area('Paste a complaint', 'Bhai refund ka kya hua? BLR-MAA wala. 2 hafte ho gaye, koi jawab nahi.')
-if st.button('Suggest category'):
-    result = ComplaintAI().classify(complaint)
-    st.json(result)
-    if result['review_required']:
-        st.warning('Weak or ambiguous wording match. Human triage required. Hindi/Hinglish coverage is limited.')
-st.subheader('Data checks')
-st.json(summary['quality'])
-st.subheader('Escalations without a usable refund reference')
-st.caption('Keep these as distinct complaints until Support verifies their booking identity. They are not automatically new refunds.')
-st.dataframe(escalations[escalations.case_id.isna()], hide_index=True, use_container_width=True)
+    st.subheader("Triage a complaint")
+    with st.form("triage"):
+        message = st.text_area("Complaint text",placeholder="Paste the agent’s message")
+        submit = st.form_submit_button("Suggest category")
+    if submit and message.strip():
+        result = ComplaintAI().classify(message)
+        st.write("Suggested category",readable(result["suggested_category"]))
+        st.caption(f"Text similarity {result['similarity']:.2f} · Compare the example before routing")
+        st.write(result["matched_example"])
+        if result["review_required"]:
+            st.warning("Ambiguous wording. Route manually.")
+    st.subheader("Complaints awaiting a reference")
+    st.dataframe(complaints[complaints.case_id.isna()][["Escalation ID","Complaint","Status","Days Open"]],hide_index=True)
+
