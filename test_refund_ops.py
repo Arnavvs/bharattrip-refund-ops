@@ -35,7 +35,7 @@ class RefundTests(unittest.TestCase):
 
     def test_generated_demo_pipeline(self):
         from demo_data import demo_tables
-        c,e,m,s = load_and_reconcile(demo_tables())
+        c,e,m,s = load_and_reconcile(demo_tables(), brief_intakes=False)
         self.assertEqual(len(c),10)
         self.assertEqual(s['quality']['support']['pasted_duplicates_removed'],1)
         self.assertEqual(s['escalations_without_reference'],1)
